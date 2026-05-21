@@ -1,0 +1,6 @@
+{
+  "name": "Rautatie",
+  "description": "Junailtu (railroaded) hidden role -päättelypeli, jossa tekoäly luo dramaturgisia kohtauksia ja reaaliaikaisia sosiaalisia toimintaohjeita larpattavaksi.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
