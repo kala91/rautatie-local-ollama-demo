@@ -63,7 +63,12 @@ Säännöt:
 - Kirjoita suomeksi.`;
 
   const content = await chatJson(baseUrl, model, prompt);
-  return normalizeArchetypes(parseJsonResponse(content), playerNames);
+  try {
+    return normalizeArchetypes(parseJsonResponse(content), playerNames);
+  } catch (error) {
+    console.warn("Ollama role JSON parsing failed, using playable fallback roles.", error);
+    return buildFallbackArchetypes(playerNames);
+  }
 }
 
 export async function generateEpilogueWithOllama(
@@ -336,6 +341,14 @@ function findArchetypeArray(data: unknown): unknown[] | null {
 
   const nestedArray = Object.values(data).find((value) => Array.isArray(value));
   return Array.isArray(nestedArray) ? nestedArray : null;
+}
+
+function buildFallbackArchetypes(playerNames: string[]): GeneratedArchetype[] {
+  return playerNames.map((name, index) => ({
+    name,
+    role: `Matkustaja ${index + 1}`,
+    secret: "Tietää junamatkasta jotakin, mitä ei halua heti kertoa muille."
+  }));
 }
 
 function getFirstString(source: Record<string, unknown>, keys: string[]) {
