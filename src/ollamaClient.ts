@@ -34,7 +34,7 @@ export async function generateSceneWithOllama(
 ): Promise<Scene> {
   const prompt = buildScenePrompt(config, history, currentSceneNumber, humanGmNotes);
   const content = await chatJson(baseUrl, model, prompt);
-  return normalizeScene(parseJsonResponse(content), currentSceneNumber, config.players.map((p) => p.name));
+  return normalizeScene(parseJsonResponse(content), currentSceneNumber, config.players.map((p) => p.name), inferScenarioLanguage(`${config.theme}\n${config.initialIdea}`));
 }
 
 export async function generateArchetypesWithOllama(
@@ -44,30 +44,31 @@ export async function generateArchetypesWithOllama(
   initialIdea: string,
   playerNames: string[]
 ) {
-  const prompt = `Luo roolit ja salaisuudet railroaded hidden role -larppipeliin.
+  const outputLanguageRule = buildOutputLanguageRule(theme, initialIdea);
+  const prompt = `Create roles and secrets for a railroaded hidden-role live roleplaying game.
 
-Teema: ${theme}
-Premissi: ${initialIdea || "Ei erityistä alustusta"}
-Pelaajat: ${playerNames.join(", ")}
+Theme: ${theme}
+Scenario premise: ${initialIdea || "No additional premise"}
+Players: ${playerNames.join(", ")}
 
-Palauta vain JSON-array. Ei markdownia.
-Muoto:
+Return only a JSON array. Do not use markdown.
+Shape:
 [
-  {"name":"pelaajan alkuperäinen nimi","role":"lyhyt rooli","secret":"toiminnallinen salaisuus tai motiivi"}
+  {"name":"original player name","role":"short playable role","secret":"actionable secret or motive"}
 ]
 
-Säännöt:
-  - Jokaisella pelaajalla pitää olla oma rooli.
-- Käytä täsmälleen annettuja pelaajanimiä.
-- Salaisuuksien pitää ristiinkytkeytyä ja tuottaa sosiaalista toimintaa.
-- Kirjoita suomeksi.`;
+Rules:
+- Every player must have one role.
+- Use the exact player names provided.
+- Secrets must interlock and create immediate social action.
+- ${outputLanguageRule}`;
 
   const content = await chatJson(baseUrl, model, prompt);
   try {
     return normalizeArchetypes(parseJsonResponse(content), playerNames);
   } catch (error) {
     console.warn("Ollama role JSON parsing failed, using playable fallback roles.", error);
-    return buildFallbackArchetypes(playerNames);
+    return buildFallbackArchetypes(playerNames, inferScenarioLanguage(`${theme}\n${initialIdea}`));
   }
 }
 
@@ -78,27 +79,30 @@ export async function generateEpilogueWithOllama(
   history: Scene[],
   humanGmNotes = ""
 ): Promise<{ epilogue: string; wasCorrectlySolved: string }> {
-  const prompt = `Kirjoita loppuepilogi pelille.
+  const outputLanguageRule = buildOutputLanguageRule(config.theme, config.initialIdea);
+  const prompt = `Write the final epilogue for this game.
 
-Teema: ${config.theme}
-Premissi: ${config.initialIdea}
-Pelaajat:
-${config.players.map((p) => `- ${p.name}: ${p.role}. Salaisuus: ${p.secret}. Kuollut: ${p.isDead ? "kylla" : "ei"}`).join("\n")}
+Theme: ${config.theme}
+Scenario premise: ${config.initialIdea}
+Players:
+${config.players.map((p) => `- ${p.name}: ${p.role}. Secret: ${p.secret}. Dead: ${p.isDead ? "yes" : "no"}`).join("\n")}
 
-Pelin historia:
-${history.map((s) => `Kohtaus ${s.sceneNumber}: ${s.sceneTitle}\n${s.narrativeIntroduction}\nPJ-huomiot: ${s.humanGmNotesFeedback || "ei"}`).join("\n\n")}
+Game history:
+${history.map((s) => `Scene ${s.sceneNumber}: ${s.sceneTitle}\n${s.narrativeIntroduction}\nHuman GM notes: ${s.humanGmNotesFeedback || "none"}`).join("\n\n")}
 
-Viimeiset PJ-huomiot: ${humanGmNotes || "ei uusia"}
+Final human GM notes: ${humanGmNotes || "none"}
 
-Palauta vain JSON-objekti:
-{"epilogue":"2-3 kappaleen loppuratkaisu suomeksi","wasCorrectlySolved":"yksi lause ryhmän suoriutumisesta"}`;
+Return only this JSON object:
+{"epilogue":"2-3 paragraph final resolution","wasCorrectlySolved":"one sentence about the group's performance"}
+
+Language rule: ${outputLanguageRule}`;
 
   const content = await chatJson(baseUrl, model, prompt);
   return normalizeEpilogue(parseJsonResponse(content));
 }
 
 async function chatJson(baseUrl: string, model: string, prompt: string): Promise<string> {
-  const systemPrompt = "Olet suomenkielinen roolipelien ja larpin dramaturgi. Palauta aina vain validia JSONia ilman markdown-koodiaitoja.";
+  const systemPrompt = "You are a dramaturg and live roleplaying game designer. Follow the user's requested output language. Always return only valid JSON without markdown code fences.";
   const chatRes = await fetch(`${cleanBaseUrl(baseUrl)}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -163,45 +167,64 @@ async function readOllamaError(res: Response) {
 
 function buildScenePrompt(config: GameConfig, history: Scene[], currentSceneNumber: number, humanGmNotes: string) {
   const totalScenes = config.totalScenes || 5;
-  return `Luo railroaded hidden role -larppipeliin kohtaus ${currentSceneNumber}/${totalScenes}.
+  const outputLanguageRule = buildOutputLanguageRule(config.theme, config.initialIdea);
+  return `Create scene ${currentSceneNumber}/${totalScenes} for a railroaded hidden-role live roleplaying game.
 
-Teema: ${config.theme}
-Premissi: ${config.initialIdea}
+Theme: ${config.theme}
+Scenario premise: ${config.initialIdea}
 
-Pelaajat:
-${config.players.map((p) => `- ${p.name}: ${p.role}. Salaisuus: ${p.secret}. Kuollut: ${p.isDead ? "kylla" : "ei"}`).join("\n")}
+Players:
+${config.players.map((p) => `- ${p.name}: ${p.role}. Secret: ${p.secret}. Dead: ${p.isDead ? "yes" : "no"}`).join("\n")}
 
-Aiemmat kohtaukset:
-${history.length ? history.map((s) => `Kohtaus ${s.sceneNumber}: ${s.sceneTitle}\nAlustus: ${s.narrativeIntroduction}\nTehtävät: ${s.playerTasks.map((t) => `${t.characterName}: ${t.instructionPrompt}`).join(" | ")}\nPJ-huomiot: ${s.humanGmNotesFeedback || "ei"}`).join("\n\n") : "Ei aiempia kohtauksia."}
+Previous scenes:
+${history.length ? history.map((s) => `Scene ${s.sceneNumber}: ${s.sceneTitle}\nIntro: ${s.narrativeIntroduction}\nTasks: ${s.playerTasks.map((t) => `${t.characterName}: ${t.instructionPrompt}`).join(" | ")}\nHuman GM notes: ${s.humanGmNotesFeedback || "none"}`).join("\n\n") : "No previous scenes."}
 
-PJ:n uudet huomiot: ${humanGmNotes || "ei uusia"}
+New human GM notes: ${humanGmNotes || "none"}
 
-Draaman kaaren sääntö:
-- 1 = esittely ja kevyt jännite
-- keskikohtaukset = konfliktin syveneminen
-- toiseksi viimeinen = konkreettinen kliimaksi
-- viimeinen = kuulustelu, ratkaisu tai totuuksien paljastus
+Story arc rule:
+- 1 = introduction and light tension
+- middle scenes = escalating conflict
+- penultimate scene = concrete climax
+- final scene = interrogation, resolution, or revelation of truths
 
-Palauta vain validi JSON-objekti. Ei markdownia.
-Muoto:
+Return only a valid JSON object. Do not use markdown.
+Shape:
 {
   "sceneNumber": ${currentSceneNumber},
-  "sceneTitle": "lyhyt otsikko",
-  "narrativeIntroduction": "1-3 lausetta PJ:n ääneen luettavaksi",
-  "dramaticArcPhase": "Esittely|Konfliktin herääminen|Käännekohta/Kliimaksi|Kuulustelu|Ratkaisu",
+  "sceneTitle": "short title",
+  "narrativeIntroduction": "1-3 sentences for the GM to read aloud",
+  "dramaticArcPhase": "Introduction|Rising conflict|Turning point/Climax|Interrogation|Resolution",
   "playerTasks": [
     {
-      "characterName": "täsmälleen pelaajan nimi",
-      "socialActionCategory": "Kysyvä|Toteava|Selvittävä|Tavoitteleva",
-      "concreteActionCategory": "Monologi|Matkiminen|Dialogi|Fyysinen ele|Siirtyminen|Esineen kanssa toimiminen",
-      "targetCharacter": "toinen pelaaja tai Kaikki",
-      "instructionPrompt": "selkeä suoritettava ohje pelaajalle juuri nyt",
-      "gamePurpose": "miksi tämä luo draamaa"
+      "characterName": "exact player name",
+      "socialActionCategory": "Questioning|Stating|Investigating|Pursuing",
+      "concreteActionCategory": "Monologue|Mimicry|Dialogue|Physical gesture|Movement|Object interaction",
+      "targetCharacter": "another player or Everyone",
+      "instructionPrompt": "clear action instruction the player can perform right now",
+      "gamePurpose": "why this creates drama"
     }
   ]
 }
 
-Anna tehtävä jokaiselle elossa olevalle pelaajalle. Jos pelaaja on kuollut, anna vain kuolleeseen statukseen sopiva tehtävä.`;
+Give a task to every living player. If a player is dead, give only a task that fits their dead status.
+Language rule: ${outputLanguageRule}`;
+}
+
+function buildOutputLanguageRule(theme: string, initialIdea: string) {
+  const sourceLanguage = inferScenarioLanguage(`${theme}\n${initialIdea}`);
+  if (sourceLanguage === "fi") {
+    return "Write all player-facing story text, roles, secrets, epilogues, and task instructions in Finnish because the scenario setup is Finnish.";
+  }
+  return "Write all player-facing story text, roles, secrets, epilogues, and task instructions in English because the scenario setup is English or unclear.";
+}
+
+function inferScenarioLanguage(text: string): "fi" | "en" {
+  const normalized = text.toLowerCase();
+  const finnishSignals = ["ä", "ö", "å", " ja ", " joka ", " koska ", " mutta ", " peli", " pelaa", " hahmo", " salais", " juna", " mysteeri"];
+  const englishSignals = [" the ", " and ", " because ", " but ", " game", " player", " character", " secret", " train", " mystery"];
+  const finnishScore = finnishSignals.filter((signal) => normalized.includes(signal)).length;
+  const englishScore = englishSignals.filter((signal) => normalized.includes(signal)).length;
+  return finnishScore > englishScore ? "fi" : "en";
 }
 
 function cleanBaseUrl(baseUrl: string) {
@@ -343,11 +366,13 @@ function findArchetypeArray(data: unknown): unknown[] | null {
   return Array.isArray(nestedArray) ? nestedArray : null;
 }
 
-function buildFallbackArchetypes(playerNames: string[]): GeneratedArchetype[] {
+function buildFallbackArchetypes(playerNames: string[], language: "fi" | "en"): GeneratedArchetype[] {
   return playerNames.map((name, index) => ({
     name,
-    role: `Matkustaja ${index + 1}`,
-    secret: "Tietää junamatkasta jotakin, mitä ei halua heti kertoa muille."
+    role: language === "fi" ? `Matkustaja ${index + 1}` : `Passenger ${index + 1}`,
+    secret: language === "fi"
+      ? "Tietää matkasta jotakin, mitä ei halua heti kertoa muille."
+      : "Knows something about the journey that they do not want to reveal immediately."
   }));
 }
 
@@ -367,22 +392,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function normalizeScene(scene: any, sceneNumber: number, playerNames: string[]): Scene {
+function normalizeScene(scene: any, sceneNumber: number, playerNames: string[], language: "fi" | "en"): Scene {
   const tasks = Array.isArray(scene.playerTasks) ? scene.playerTasks : [];
   return {
     sceneNumber: Number(scene.sceneNumber || sceneNumber),
-    sceneTitle: String(scene.sceneTitle || `Kohtaus ${sceneNumber}`),
+    sceneTitle: String(scene.sceneTitle || (language === "fi" ? `Kohtaus ${sceneNumber}` : `Scene ${sceneNumber}`)),
     narrativeIntroduction: String(scene.narrativeIntroduction || ""),
-    dramaticArcPhase: String(scene.dramaticArcPhase || "Kohtaus"),
+    dramaticArcPhase: String(scene.dramaticArcPhase || (language === "fi" ? "Kohtaus" : "Scene")),
     playerTasks: playerNames.map((name) => {
       const task = tasks.find((t: any) => String(t.characterName || "").toLowerCase() === name.toLowerCase()) || {};
       return {
         characterName: name,
-        socialActionCategory: String(task.socialActionCategory || "Toteava"),
-        concreteActionCategory: String(task.concreteActionCategory || "Dialogi"),
-        targetCharacter: String(task.targetCharacter || "Kaikki"),
-        instructionPrompt: String(task.instructionPrompt || "Osallistu kohtaukseen roolisi näkökulmasta ja reagoi muiden toimintaan."),
-        gamePurpose: String(task.gamePurpose || "Pitää kohtaus liikkeessä.")
+        socialActionCategory: String(task.socialActionCategory || (language === "fi" ? "Toteava" : "Stating")),
+        concreteActionCategory: String(task.concreteActionCategory || (language === "fi" ? "Dialogi" : "Dialogue")),
+        targetCharacter: String(task.targetCharacter || (language === "fi" ? "Kaikki" : "Everyone")),
+        instructionPrompt: String(task.instructionPrompt || (language === "fi"
+          ? "Osallistu kohtaukseen roolisi näkökulmasta ja reagoi muiden toimintaan."
+          : "Participate in the scene from your role's point of view and respond to the others.")),
+        gamePurpose: String(task.gamePurpose || (language === "fi" ? "Pitää kohtaus liikkeessä." : "Keeps the scene moving."))
       };
     })
   };
